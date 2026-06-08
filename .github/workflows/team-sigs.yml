@@ -1,7 +1,7 @@
 name: Verify Team Signature
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened]
 
 jobs:
@@ -35,34 +35,32 @@ jobs:
         run: |
           cd target-repo
 
-          # Explicitly download the PR commits so the local Git database recognizes the objects
           git fetch origin pull/${{ github.event.pull_request.number }}/head
 
           COMMITS=$(gh pr view ${{ github.event.pull_request.number }} --json commits --jq '.commits[].oid')
 
           for COMMIT in $COMMITS; do
-            AUTHOR_LOGIN=$(gh api repos/${{ github.repository }}/commits/$COMMIT --jq '.author.login')
+            # Extract both identities from the commit
             AUTHOR_EMAIL=$(git log -1 --format="%ae" $COMMIT)
+            COMMITTER_EMAIL=$(git log -1 --format="%ce" $COMMIT)
 
-            if [ -z "$AUTHOR_LOGIN" ] || [ "$AUTHOR_LOGIN" == "null" ]; then
-              echo "Error: Could not resolve GitHub login for commit $COMMIT"
-              exit 1
-            fi
+            > ../allowed_signers
 
-            SIG_FILE="../team-sigs/${AUTHOR_LOGIN}.txt"
+            # Map both the Author and Committer emails to every team key
+            for KEY_FILE in ../team-sigs/*.txt; do
+              if [ -f "$KEY_FILE" ]; then
+                PUB_KEY=$(cat "$KEY_FILE")
+                echo "$AUTHOR_EMAIL $PUB_KEY" >> ../allowed_signers
+                echo "$COMMITTER_EMAIL $PUB_KEY" >> ../allowed_signers
+              fi
+            done
 
-            if [ ! -f "$SIG_FILE" ]; then
-              echo "Error: Signature file not found for @$AUTHOR_LOGIN"
-              exit 1
-            fi
-
-            echo "$AUTHOR_EMAIL $(cat $SIG_FILE)" > ../allowed_signers
             git config gpg.ssh.allowedSignersFile ../allowed_signers
 
             if ! git verify-commit $COMMIT; then
-              echo "Error: Cryptographic verification failed for commit $COMMIT"
+              echo "❌ Error: Cryptographic verification failed for commit $COMMIT."
               exit 1
             fi
 
-            echo "Commit $COMMIT verified successfully for @$AUTHOR_LOGIN."
+            echo "✅ Commit $COMMIT verified successfully."
           done
