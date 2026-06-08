@@ -35,28 +35,25 @@ jobs:
         run: |
           cd target-repo
 
+          # Fetch the exact PR commits
           git fetch origin pull/${{ github.event.pull_request.number }}/head
 
+          # 1. Import all team GPG public keys into the runner's fresh keyring
+          echo "Importing team GPG keys..."
+          for KEY_FILE in ../team-sigs/*.txt; do
+            if [ -f "$KEY_FILE" ]; then
+              gpg --import "$KEY_FILE"
+            fi
+          done
+
+          # 2. Verify each commit
           COMMITS=$(gh pr view ${{ github.event.pull_request.number }} --json commits --jq '.commits[].oid')
 
           for COMMIT in $COMMITS; do
-            # Extract both identities from the commit
-            AUTHOR_EMAIL=$(git log -1 --format="%ae" $COMMIT)
-            COMMITTER_EMAIL=$(git log -1 --format="%ce" $COMMIT)
+            echo "Verifying commit $COMMIT..."
 
-            > ../allowed_signers
-
-            # Map both the Author and Committer emails to every team key
-            for KEY_FILE in ../team-sigs/*.txt; do
-              if [ -f "$KEY_FILE" ]; then
-                PUB_KEY=$(cat "$KEY_FILE")
-                echo "$AUTHOR_EMAIL $PUB_KEY" >> ../allowed_signers
-                echo "$COMMITTER_EMAIL $PUB_KEY" >> ../allowed_signers
-              fi
-            done
-
-            git config gpg.ssh.allowedSignersFile ../allowed_signers
-
+            # git verify-commit will check the signature against the keys we just imported.
+            # If the commit was signed by ANY team member's key, it passes.
             if ! git verify-commit $COMMIT; then
               echo "❌ Error: Cryptographic verification failed for commit $COMMIT."
               exit 1
