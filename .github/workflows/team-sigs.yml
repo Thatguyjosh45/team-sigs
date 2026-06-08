@@ -34,6 +34,10 @@ jobs:
           GH_TOKEN: ${{ steps.get_token.outputs.token }}
         run: |
           cd target-repo
+
+          # Explicitly download the PR commits so the local Git database recognizes the objects
+          git fetch origin pull/${{ github.event.pull_request.number }}/head
+
           COMMITS=$(gh pr view ${{ github.event.pull_request.number }} --json commits --jq '.commits[].oid')
 
           for COMMIT in $COMMITS; do
@@ -41,12 +45,14 @@ jobs:
             AUTHOR_EMAIL=$(git log -1 --format="%ae" $COMMIT)
 
             if [ -z "$AUTHOR_LOGIN" ] || [ "$AUTHOR_LOGIN" == "null" ]; then
+              echo "Error: Could not resolve GitHub login for commit $COMMIT"
               exit 1
             fi
 
             SIG_FILE="../team-sigs/${AUTHOR_LOGIN}.txt"
 
             if [ ! -f "$SIG_FILE" ]; then
+              echo "Error: Signature file not found for @$AUTHOR_LOGIN"
               exit 1
             fi
 
@@ -54,6 +60,9 @@ jobs:
             git config gpg.ssh.allowedSignersFile ../allowed_signers
 
             if ! git verify-commit $COMMIT; then
+              echo "Error: Cryptographic verification failed for commit $COMMIT"
               exit 1
             fi
+
+            echo "Commit $COMMIT verified successfully for @$AUTHOR_LOGIN."
           done
